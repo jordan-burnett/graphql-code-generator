@@ -1,11 +1,15 @@
-import { Types, PluginValidateFn, PluginFunction } from '@graphql-codegen/plugin-helpers';
-import { GraphQLSchema, isInterfaceType, isObjectType } from 'graphql';
-import { extname } from 'path';
-import { ApolloClientHelpersConfig } from './config';
+import path from 'path';
+
+import type { Types, PluginValidateFn, PluginFunction } from '@graphql-codegen/plugin-helpers';
+import type { GraphQLSchema } from 'graphql';
+import { isInterfaceType, isObjectType } from 'graphql';
+
+import type { ApolloClientHelpersConfig } from './config';
+import { typeHasId, typeMatchesOptions } from './utils';
 
 export const plugin: PluginFunction<ApolloClientHelpersConfig> = (
   schema: GraphQLSchema,
-  documents: Types.DocumentFile[],
+  _documents: Types.DocumentFile[],
   config: ApolloClientHelpersConfig
 ) => {
   const results: Types.ComplexPluginOutput[] = [];
@@ -13,9 +17,9 @@ export const plugin: PluginFunction<ApolloClientHelpersConfig> = (
   results.push(generateTypePoliciesSignature(schema, config));
 
   return {
-    prepend: results.reduce((prev, r) => [...prev, ...(r.prepend || [])], []),
-    append: results.reduce((prev, r) => [...prev, ...(r.append || [])], []),
-    content: results.map(r => r.content).join('\n'),
+    prepend: results.reduce<string[]>((prev, result) => [...prev, ...(result.prepend || [])], []),
+    append: results.reduce<string[]>((prev, result) => [...prev, ...(result.append || [])], []),
+    content: results.map((result) => result.content).join('\n'),
   };
 };
 
@@ -25,37 +29,6 @@ function generateTypePoliciesSignature(
 ): Types.ComplexPluginOutput {
   const typeMap = schema.getTypeMap();
   const perTypePolicies: string[] = [];
-  const typedTypePolicies = Object.keys(typeMap).reduce((prev, typeName) => {
-    const type = typeMap[typeName];
-
-    if (!typeName.startsWith('__') && (isObjectType(type) || isInterfaceType(type))) {
-      const fieldsNames = Object.keys(type.getFields()).filter(f => !f.startsWith('__'));
-      const keySpecifierVarName = `${typeName}KeySpecifier`;
-      const fieldPolicyVarName = `${typeName}FieldPolicy`;
-
-      perTypePolicies.push(
-        `export type ${keySpecifierVarName} = (${fieldsNames
-          .map(f => `'${f}'`)
-          .join(' | ')} | ${keySpecifierVarName})[];`
-      );
-
-      perTypePolicies.push(`export type ${fieldPolicyVarName} = {
-${fieldsNames.map(fieldName => `\t${fieldName}?: FieldPolicy<any> | FieldReadFunction<any>`).join(',\n')}
-};`);
-
-      return {
-        ...prev,
-        [typeName]: `Omit<TypePolicy, "fields" | "keyFields"> & {
-\t\tkeyFields${
-          config.requireKeyFields ? '' : '?'
-        }: false | ${keySpecifierVarName} | (() => undefined | ${keySpecifierVarName}),
-\t\tfields?: ${fieldPolicyVarName},
-\t}`,
-      };
-    }
-
-    return prev;
-  }, {} as Record<string, string>);
 
   const rootTypes = [
     schema.getQueryType()?.name,
@@ -63,18 +36,71 @@ ${fieldsNames.map(fieldName => `\t${fieldName}?: FieldPolicy<any> | FieldReadFun
     schema.getSubscriptionType()?.name,
   ].filter(Boolean);
 
-  const rootContent = `export type StrictTypedTypePolicies = {${Object.keys(typedTypePolicies)
-    .map(typeName => {
-      const nonOptional = config.requirePoliciesForAllTypes && !rootTypes.includes(typeName);
+  const nonOptionalTypes = Object.entries(typeMap).reduce<string[]>((prev, [typeName, type]) => {
+    if (
+      !rootTypes.includes(typeName) &&
+      (config.requirePoliciesForAllTypes ||
+        (!typeMatchesOptions(type, config.requirePoliciesForFieldsWithoutId) && !typeHasId(type)))
+    ) {
+      prev.push(typeName);
+    }
+    return prev;
+  }, []);
 
+  const typedTypePolicies = Object.keys(typeMap).reduce((prev, typeName) => {
+    const type = typeMap[typeName];
+
+    if (!typeName.startsWith('__') && (isObjectType(type) || isInterfaceType(type))) {
+      const fieldMap = type.getFields();
+      const fieldsNames = Object.keys(fieldMap).filter((fieldName) => !fieldName.startsWith('__'));
+      const keySpecifierVarName = `${typeName}KeySpecifier`;
+      const fieldPolicyVarName = `${typeName}FieldPolicy`;
+
+      perTypePolicies.push(
+        `export type ${keySpecifierVarName} = (${fieldsNames
+          .map((fieldName) => `'${fieldName}'`)
+          .join(' | ')} | ${keySpecifierVarName})[];`
+      );
+
+      let hasNonOptionalField = false;
+      const fieldPolicies = fieldsNames.map((fieldName) => {
+        const field = fieldMap[fieldName];
+        const nonOptional =
+          field?.type &&
+          typeMatchesOptions(field.type, config.requirePoliciesForFieldsWithoutId) &&
+          !typeHasId(field.type);
+        if (nonOptional) {
+          hasNonOptionalField = true;
+          nonOptionalTypes.push(typeName);
+        }
+        return `\t${fieldName}${nonOptional ? '' : '?'}: FieldPolicy<any> | FieldReadFunction<any>`;
+      });
+
+      perTypePolicies.push(`export type ${fieldPolicyVarName} = {\n${fieldPolicies.join(',\n')}\n};`);
+
+      return {
+        ...prev,
+        [typeName]: `Omit<TypePolicy, "fields" | "keyFields"> & {
+\t\tkeyFields${config.requireKeyFields ? '' : '?'
+          }: false | ${keySpecifierVarName} | (() => undefined | ${keySpecifierVarName}),
+\t\tfields${hasNonOptionalField ? '' : '?'}: ${fieldPolicyVarName},
+\t}`,
+      };
+    }
+
+    return prev;
+  }, {} as Record<string, string>);
+
+  const rootContent = `export type StrictTypedTypePolicies = {${Object.keys(typedTypePolicies)
+    .map((typeName) => {
+      const nonOptional = nonOptionalTypes.includes(typeName);
       return `\n\t${typeName}${nonOptional ? '' : '?'}: ${typedTypePolicies[typeName]}`;
     })
     .join(',')}\n};\nexport type TypedTypePolicies = StrictTypedTypePolicies & TypePolicies;`;
 
   return {
     prepend: [
-      `import ${
-        config.useTypeImports ? 'type ' : ''
+      `import ${config.useTypeImports ? 'type ' : ''
       }{ FieldPolicy, FieldReadFunction, TypePolicies, TypePolicy } from '@apollo/client/cache';`,
     ],
     content: [...perTypePolicies, rootContent].join('\n'),
@@ -82,12 +108,12 @@ ${fieldsNames.map(fieldName => `\t${fieldName}?: FieldPolicy<any> | FieldReadFun
 }
 
 export const validate: PluginValidateFn<ApolloClientHelpersConfig> = async (
-  schema: GraphQLSchema,
-  documents: Types.DocumentFile[],
-  config,
+  _schema: GraphQLSchema,
+  _documents: Types.DocumentFile[],
+  _config,
   outputFile: string
 ) => {
-  if (extname(outputFile) !== '.ts' && extname(outputFile) !== '.tsx') {
+  if (path.extname(outputFile) !== '.ts' && path.extname(outputFile) !== '.tsx') {
     throw new Error(`Plugin "apollo-client-helpers" requires extension to be ".ts" or ".tsx"!`);
   }
 };

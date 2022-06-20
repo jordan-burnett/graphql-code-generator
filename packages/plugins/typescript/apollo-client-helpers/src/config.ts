@@ -1,4 +1,10 @@
-export type ApolloClientHelpersConfig = {
+export interface TypeMatchOptions {
+  exclude?: string[];
+  excludePrefixes?: string[];
+  excludeSuffixes?: string[];
+}
+
+export interface ApolloClientHelpersConfig {
   /**
    * @name useTypeImports
    * @type boolean
@@ -29,4 +35,12 @@ export type ApolloClientHelpersConfig = {
    *
    */
   requirePoliciesForAllTypes?: boolean;
-};
+  /**
+   * @name requirePoliciesForAllTypes
+   * @type boolean | TypeMatchOptions
+   * @default false
+   * @description Remove optional sign from all fields where the type (or subtype if it is a list or union) does not contain an id.
+   *
+   */
+  requirePoliciesForFieldsWithoutId?: boolean | TypeMatchOptions;
+}
