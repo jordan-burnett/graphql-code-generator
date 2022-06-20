@@ -1,15 +1,12 @@
-import path from 'path';
-
-import type { Types, PluginValidateFn, PluginFunction } from '@graphql-codegen/plugin-helpers';
-import type { GraphQLSchema } from 'graphql';
-import { isInterfaceType, isObjectType } from 'graphql';
-
-import type { ApolloClientHelpersConfig } from './config';
+import { Types, PluginValidateFn, PluginFunction } from '@graphql-codegen/plugin-helpers';
+import { GraphQLSchema, isInterfaceType, isObjectType } from 'graphql';
+import { extname } from 'path';
+import { ApolloClientHelpersConfig } from './config';
 import { typeHasId, typeMatchesOptions } from './utils';
 
 export const plugin: PluginFunction<ApolloClientHelpersConfig> = (
   schema: GraphQLSchema,
-  _documents: Types.DocumentFile[],
+  documents: Types.DocumentFile[],
   config: ApolloClientHelpersConfig
 ) => {
   const results: Types.ComplexPluginOutput[] = [];
@@ -17,9 +14,9 @@ export const plugin: PluginFunction<ApolloClientHelpersConfig> = (
   results.push(generateTypePoliciesSignature(schema, config));
 
   return {
-    prepend: results.reduce<string[]>((prev, result) => [...prev, ...(result.prepend || [])], []),
-    append: results.reduce<string[]>((prev, result) => [...prev, ...(result.append || [])], []),
-    content: results.map((result) => result.content).join('\n'),
+    prepend: results.reduce((prev, r) => [...prev, ...(r.prepend || [])], []),
+    append: results.reduce((prev, r) => [...prev, ...(r.append || [])], []),
+    content: results.map(r => r.content).join('\n'),
   };
 };
 
@@ -108,12 +105,12 @@ function generateTypePoliciesSignature(
 }
 
 export const validate: PluginValidateFn<ApolloClientHelpersConfig> = async (
-  _schema: GraphQLSchema,
-  _documents: Types.DocumentFile[],
-  _config,
+  schema: GraphQLSchema,
+  documents: Types.DocumentFile[],
+  config,
   outputFile: string
 ) => {
-  if (path.extname(outputFile) !== '.ts' && path.extname(outputFile) !== '.tsx') {
+  if (extname(outputFile) !== '.ts' && extname(outputFile) !== '.tsx') {
     throw new Error(`Plugin "apollo-client-helpers" requires extension to be ".ts" or ".tsx"!`);
   }
 };
